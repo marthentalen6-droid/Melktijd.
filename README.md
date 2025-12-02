@@ -1,1 +1,219 @@
-# Melktijd.
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Koeienkeuring – Melkmoment Planner</title>
+
+<!-- jsPDF voor PDF-export -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+    body{
+        font-family: "Segoe UI", Arial;
+        background:#f3f5fb;
+        margin:0;
+        padding:20px;
+        color:#222;
+    }
+    h1{margin-top:0;}
+    .card{
+        background:white;
+        padding:16px;
+        border-radius:12px;
+        margin-bottom:18px;
+        box-shadow:0 4px 18px rgba(0,0,0,0.08);
+    }
+    label{font-weight:bold; display:block; margin-bottom:4px;}
+    input{
+        width:100%; padding:8px; margin-bottom:10px;
+        border-radius:6px; border:1px solid #ccc;
+    }
+    button{
+        background:#2563eb; color:white; border:none;
+        padding:10px 15px; border-radius:8px;
+        cursor:pointer; font-size:16px;
+    }
+    button.secondary{background:#555;}
+    .cow-block{
+        border:1px solid #dde3f0;
+        padding:12px;
+        border-radius:10px;
+        margin-top:10px;
+        background:#fafbff;
+    }
+    .grid{display:grid; grid-template-columns:repeat(2,1fr); gap:10px;}
+    table{width:100%; border-collapse:collapse; margin-top:12px;}
+    th,td{padding:6px; border-bottom:1px solid #eee; text-align:left;}
+</style>
+</head>
+<body>
+
+<h1>Koeienkeuring – Melkmoment Planner</h1>
+
+<div class="card">
+    <button onclick="addCow()">➕ Koe toevoegen</button>
+    <button class="secondary" onclick="generatePDF()">📄 PDF Export</button>
+
+    <div id="cowList"></div>
+</div>
+
+<div class="card">
+    <h2>Resultaten</h2>
+    <div id="results"></div>
+</div>
+
+<script>
+let cows = [];
+
+function addCow(){
+    const id = Date.now();
+    const div = document.createElement("div");
+    div.className = "cow-block";
+    div.id = "cow-"+id;
+
+    let nextHour = new Date();
+    nextHour.setMinutes(0,0,0);
+    nextHour.setHours(nextHour.getHours()+1);
+    let nextHourStr = nextHour.toISOString().slice(0,16);
+
+    div.innerHTML = `
+        <label>Koe naam</label>
+        <input type="text" id="name-${id}" placeholder="Bijv. Klara 12">
+
+        <label>Keuringstijd</label>
+        <input type="datetime-local" id="target-${id}" value="${nextHourStr}">
+
+        <div class="grid">
+            <div><label>FL (uren)</label><input id="FL-${id}" type="number" min="0" max="30" value="12"></div>
+            <div><label>FR (uren)</label><input id="FR-${id}" type="number" min="0" max="30" value="12"></div>
+            <div><label>RL (uren)</label><input id="RL-${id}" type="number" min="0" max="30" value="12"></div>
+            <div><label>RR (uren)</label><input id="RR-${id}" type="number" min="0" max="30" value="12"></div>
+        </div>
+
+        <button onclick="setEqual(${id})">Alle kwartieren gelijk</button>
+        <button class="secondary" onclick="calculateCow(${id})">Bereken voor deze koe</button>
+        <div id="result-${id}"></div>
+    `;
+
+    document.getElementById("cowList").appendChild(div);
+}
+
+function setEqual(id){
+    const val = document.getElementById("FL-"+id).value;
+    ["FR","RL","RR"].forEach(q => {
+        document.getElementById(q+"-"+id).value = val;
+    });
+}
+
+function round30(d){
+    const step = 30*60000;
+    return new Date(Math.round(d.getTime()/step)*step);
+}
+
+function format(d){
+    return d.toLocaleDateString() + " " +
+           d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+
+function calculateCow(id){
+    const targetVal = document.getElementById("target-"+id).value;
+    if(!targetVal){ alert("Vul keuringstijd in voor deze koe!"); return; }
+
+    const target = new Date(targetVal.replace("T"," ") + ":00");
+    if(isNaN(target.getTime())){ alert("Ongeldige datum."); return; }
+
+    const cowName = document.getElementById("name-"+id).value || "Naamloos";
+
+    const quarters = ["FL","FR","RL","RR"];
+    const needed = {};
+    const lastMilk = {};
+
+    quarters.forEach(q=>{
+        needed[q] = Number(document.getElementById(q+"-"+id).value);
+        lastMilk[q] = round30(new Date(target.getTime() - needed[q]*3600000));
+    });
+
+    cows = cows.filter(c=>c.id!==id);
+    cows.push({id, name:cowName, target, lastMilk, needed});
+
+    document.getElementById("result-"+id).innerHTML = `
+        <h3>${cowName}</h3>
+        <p><b>Keuringstijd:</b> ${format(target)}</p>
+        <table>
+            <tr><th>Kwart</th><th>Uren nodig</th><th>Laatste melktijd</th></tr>
+            ${quarters.map(q=>`
+                <tr>
+                    <td>${q}</td>
+                    <td>${needed[q]}</td>
+                    <td>${format(lastMilk[q])}</td>
+                </tr>
+            `).join("")}
+        </table>
+    `;
+
+    showAllResults();
+}
+
+function showAllResults(){
+    const div = document.getElementById("results");
+    if(cows.length===0){
+        div.innerHTML = "<p>Geen berekeningen uitgevoerd.</p>";
+        return;
+    }
+
+    div.innerHTML = cows.map(c => `
+        <h3>${c.name}</h3>
+        <p><b>Keuringstijd:</b> ${format(c.target)}</p>
+        <table>
+            <tr><th>Kwart</th><th>Uren</th><th>Melktijd</th></tr>
+            ${["FL","FR","RL","RR"].map(q => `
+                <tr>
+                    <td>${q}</td>
+                    <td>${c.needed[q]} uur</td>
+                    <td>${format(c.lastMilk[q])}</td>
+                </tr>
+            `).join("")}
+        </table>
+    `).join("<br>");
+}
+
+async function generatePDF(){
+    if(cows.length===0){
+        alert("Geen koeien om te exporteren.");
+        return;
+    }
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF();
+
+    pdf.setFontSize(18);
+    pdf.text("Melkmomenten – Koeienkeuring", 10, 15);
+    pdf.setFontSize(12);
+
+    let y = 30;
+
+    cows.forEach(c=>{
+        pdf.text(`Koe: ${c.name}`, 10, y);
+        y += 6;
+        pdf.text(`Keuringstijd: ${format(c.target)}`, 10, y);
+        y += 6;
+
+        ["FL","FR","RL","RR"].forEach(q=>{
+            pdf.text(`${q}: ${c.needed[q]} uur → ${format(c.lastMilk[q])}`, 15, y);
+            y+=6;
+        });
+
+        y+=6;
+        if(y>270){
+            pdf.addPage();
+            y = 20;
+        }
+    });
+
+    pdf.save("melkmomenten.pdf");
+}
+</script>
+
+</body>
+</html>
